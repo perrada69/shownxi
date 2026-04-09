@@ -549,7 +549,7 @@ msg_err_open:   defm    "Cannot open: ", 0
 msg_err_read:   defm    "Read error or short file", 0
 
 msg_help:
-    defm    "SHOWNXI v1.4 - NXI Layer 2 viewer", 13
+    defm    "SHOWNXI - NXI Layer 2 viewer", 13
     defm    "Credit: Shrek/MB Maniax 2026", 13
     defb    13
     defm    "Usage:", 13
