@@ -745,7 +745,7 @@ msg_err_read:   defm    "Read error or short file", 0
 msg_err_size:   defm    "Unsupported NXI size: ", 0
 
 msg_help:
-    defm    "SHOWNXI v2.1 - NXI Layer 2 viewer", 13
+    defm    "SHOWNXI 1.0 - NXI Layer 2 viewer", 13
     defm    "Credit: Shrek/MB Maniax 2026", 13
     defb    13
     defm    "Usage:", 13
