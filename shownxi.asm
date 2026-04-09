@@ -33,6 +33,9 @@ SIZE_IMAGE       EQU 49152
 SIZE_PALETTE     EQU 512
 CHUNK            EQU 256
 
+PALCTRL_L2_1     EQU %00010000   ; write/read Layer2 first, active Layer2 palette = first
+PALCTRL_L2_2     EQU %01010100   ; write/read Layer2 second, active Layer2 palette = second
+
 ; =============================================================================
 MAIN:
 ; =============================================================================
@@ -44,6 +47,8 @@ MAIN:
 
     ld      a, (filename_buf)
     or      a
+    jp      z, SHOW_HELP
+    cp      13
     jp      z, SHOW_HELP
 
     cp      '-'
@@ -133,7 +138,7 @@ MAIN:
     or      a
     jp      nz, .err_read
 
-    call    UPLOAD_PALETTE
+    call    UPLOAD_PALETTE_L2_2
 
     ; explicitne nastav file pointer za paletu
     ld      a, (file_handle)
@@ -150,6 +155,9 @@ MAIN:
     ld      a, (file_stat+7)
     or      a
     jp      nz, .err_bad_size
+
+    ; Soubor nema paletu -> pouzij prvni Layer 2 paletu
+    call    SELECT_L2_PALETTE_1
 
     ; Soubor nema paletu -> seek zpet na zacatek
     ld      a, (file_handle)
@@ -187,6 +195,7 @@ MAIN:
     call    L2_SHOW
     call    WAIT_KEY
     call    L2_HIDE
+    call    SELECT_L2_PALETTE_1
     ld      bc, 0
     ret
 
@@ -408,11 +417,33 @@ L2_HIDE:
     ret
 
 ; =============================================================================
-; UPLOAD_PALETTE
-; 256 entries * 2 bytes
+; SELECT_L2_PALETTE_1 / SELECT_L2_PALETTE_2
+; pouze prepina aktivni Layer 2 paletu
+; =============================================================================
+SELECT_L2_PALETTE_1:
+    ld      bc, NEXTREG_SEL
+    ld      a, NR_PALETTE_CTRL
+    out     (c), a
+    ld      bc, NEXTREG_DAT
+    ld      a, PALCTRL_L2_1
+    out     (c), a
+    ret
+
+SELECT_L2_PALETTE_2:
+    ld      bc, NEXTREG_SEL
+    ld      a, NR_PALETTE_CTRL
+    out     (c), a
+    ld      bc, NEXTREG_DAT
+    ld      a, PALCTRL_L2_2
+    out     (c), a
+    ret
+
+; =============================================================================
+; UPLOAD_PALETTE_L2_2
+; 256 entries * 2 bytes do druhe Layer 2 palety
 ; BC se uvnitr smycky pouziva na porty, takze loop counter nesmi byt v B
 ; =============================================================================
-UPLOAD_PALETTE:
+UPLOAD_PALETTE_L2_2:
     ; NR_PALETTE_CTRL $43 = $10:
     ;   bit7=0  auto-increment ZAPNUT
     ;   bits6-4 = 001 = Layer 2 first palette
@@ -431,7 +462,7 @@ UPLOAD_PALETTE:
     ld      a, NR_PALETTE_CTRL
     out     (c), a
     ld      bc, NEXTREG_DAT
-    ld      a, %00010000                ; $10: auto-inc ON, Layer2 first
+    ld      a, PALCTRL_L2_2            ; $54: auto-inc ON, Layer2 second + active second
     out     (c), a
 
     ; index = 0
@@ -551,6 +582,8 @@ EXTRACT_FILENAME:
     ld      (de), a
     ld      a, (filename_buf)
     or      a
+    jr      z, .empty
+    cp      13
     jr      z, .empty
     ret
 
@@ -712,7 +745,7 @@ msg_err_read:   defm    "Read error or short file", 0
 msg_err_size:   defm    "Unsupported NXI size: ", 0
 
 msg_help:
-    defm    "SHOWNXI v1.9 - NXI Layer 2 viewer", 13
+    defm    "SHOWNXI v2.1 - NXI Layer 2 viewer", 13
     defm    "Credit: Shrek/MB Maniax 2026", 13
     defb    13
     defm    "Usage:", 13
