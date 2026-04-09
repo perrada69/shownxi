@@ -22,7 +22,12 @@ NR_PALETTE_CTRL  EQU $43
 F_OPEN           EQU $9A
 F_CLOSE          EQU $9B
 F_READ           EQU $9D
+F_SEEK           EQU $9F
+F_FGETPOS         EQU $A0
+F_FSTAT          EQU $A1
 FA_READ          EQU $01
+FA_SEEK_SET      EQU $00
+FA_SEEK_END      EQU $02
 
 SIZE_IMAGE       EQU 49152
 SIZE_PALETTE     EQU 512
@@ -66,6 +71,96 @@ MAIN:
     ; Priprav Layer 2 rezim 256x192
     call    L2_INIT_256
 
+    ; Zjisti velikost souboru pres F_FSTAT.
+    ; V dot commandu se misto IX predava buffer v HL.
+    ; file_stat +7..+10 = velikost souboru (little endian)
+    ; NXI 49152B = jen pixely (zadna paleta)
+    ; NXI 49664B = 512B paleta + 49152B pixely
+    ld      a, (file_handle)
+    ld      hl, file_stat
+    rst     $08
+    defb    F_FSTAT
+    jp      c, .err_read
+
+    ; podporujeme presne jen:
+    ;   0000:C000 = 49152  (jen pixely)
+    ;   0000:C200 = 49664  (512B paleta + 49152B pixely)
+    ; file_stat+7 = low byte
+    ; file_stat+8 = high byte
+    ; file_stat+9 = high word low
+    ; file_stat+10= high word high
+    ld      a, (file_stat+10)
+    or      a
+    jp      nz, .err_bad_size
+    ld      a, (file_stat+9)
+    or      a
+    jp      nz, .err_bad_size
+
+    ld      a, (file_stat+8)
+    cp      $C2
+    jr      z, .check_49664
+    cp      $C0
+    jr      z, .check_49152
+    jp      .err_bad_size
+
+.check_49664:
+    ld      a, (file_stat+7)
+    or      a
+    jp      nz, .err_bad_size
+
+    ; seek na zacatek a nacti paletu
+    ld      a, (file_handle)
+    ld      bc, 0
+    ld      de, 0
+    ld      l, FA_SEEK_SET
+    rst     $08
+    defb    F_SEEK
+    jp      c, .err_read
+
+    ; Nacti 512B palety
+    ld      a, (file_handle)
+    ld      hl, palette_buf
+    ld      bc, SIZE_PALETTE
+    rst     $08
+    defb    F_READ
+    jp      c, .err_read
+
+    ; BC = bytes actually read, musi byt presne 512 = $0200
+    ld      a, b
+    cp      2
+    jp      nz, .err_read
+    ld      a, c
+    or      a
+    jp      nz, .err_read
+
+    call    UPLOAD_PALETTE
+
+    ; explicitne nastav file pointer za paletu
+    ld      a, (file_handle)
+    ld      bc, 0
+    ld      de, SIZE_PALETTE            ; 512 = $0200
+    ld      l, FA_SEEK_SET
+    rst     $08
+    defb    F_SEEK
+    jp      c, .err_read
+
+    jr      .load_pixels
+
+.check_49152:
+    ld      a, (file_stat+7)
+    or      a
+    jp      nz, .err_bad_size
+
+    ; Soubor nema paletu -> seek zpet na zacatek
+    ld      a, (file_handle)
+    ld      bc, 0
+    ld      de, 0
+    ld      l, FA_SEEK_SET
+    rst     $08
+    defb    F_SEEK
+    jp      c, .err_read
+
+.load_pixels:
     ; Nacti 3x16K obraz do aktualnich Layer 2 bank
     ld      a, (l2_base_bank)
     call    READ_16K_TO_L2
@@ -81,33 +176,17 @@ MAIN:
     call    READ_16K_TO_L2
     jp      c, .err_read
 
-    ; Obnov MMU, aby byl videt palette_buf
+    ; Obnov MMU, aby byl videt zbytek dat
     call    RESTORE_MMU_SLOTS
 
-    ; Pokus o doceteni 512B palety
-    ld      a, (file_handle)
-    ld      hl, palette_buf
-    ld      bc, SIZE_PALETTE
-    rst     $08
-    defb    F_READ
-    jr      c, .no_palette
-
-    ; BC = bytes actually read, paleta je volitelna
-    ld      a, b
-    cp      2
-    jr      nz, .no_palette
-    ld      a, c
-    or      a
-    jr      nz, .no_palette
-
-    call    UPLOAD_PALETTE
-
-.no_palette:
+    ; Paleta uz byla nactena pred pixely, nic dalsiho necteme
     ld      a, (file_handle)
     rst     $08
     defb    F_CLOSE
 
     call    L2_SHOW
+    call    WAIT_KEY
+    call    L2_HIDE
     ld      bc, 0
     ret
 
@@ -124,6 +203,29 @@ MAIN:
     call    PRINT_HEX8
     call    PRINT_NL
     call    DECODE_ERRCODE
+    ld      bc, 0
+    ret
+
+.err_bad_size:
+    push    bc
+    push    de
+    call    RESTORE_MMU_SLOTS
+    ld      a, (file_handle)
+    rst     $08
+    defb    F_CLOSE
+    ld      hl, msg_err_size
+    call    PRINT_MSG
+    pop     de
+    pop     bc
+    ld      a, (file_stat+10)
+    call    PRINT_HEX8
+    ld      a, (file_stat+9)
+    call    PRINT_HEX8
+    ld      a, (file_stat+8)
+    call    PRINT_HEX8
+    ld      a, (file_stat+7)
+    call    PRINT_HEX8
+    call    PRINT_NL
     ld      bc, 0
     ret
 
@@ -294,18 +396,42 @@ L2_SHOW:
     out     (c), a
     ret
 
+L2_HIDE:
+    ; Display Control 1, bit 7 = Layer 2 hidden
+    ld      bc, NEXTREG_SEL
+    ld      a, NR_DISPLAY_CTRL1
+    out     (c), a
+    ld      bc, NEXTREG_DAT
+    in      a, (c)
+    and     %01111111
+    out     (c), a
+    ret
+
 ; =============================================================================
 ; UPLOAD_PALETTE
 ; 256 entries * 2 bytes
 ; BC se uvnitr smycky pouziva na porty, takze loop counter nesmi byt v B
 ; =============================================================================
 UPLOAD_PALETTE:
-    ; vyber paletu Layer 2, first palette
+    ; NR_PALETTE_CTRL $43 = $10:
+    ;   bit7=0  auto-increment ZAPNUT
+    ;   bits6-4 = 001 = Layer 2 first palette
+    ;
+    ; Pro 512B paletu (9-bit mod) pouzivame NR_PALETTE_VAL9 $44.
+    ; KLIC: $243B se nastavi na $44 JEN JEDNOU pred smyckou,
+    ; pak se pise POUZE do $253B (data port).
+    ; Kazdy zapis do $253B (pri $243B=$44) je jeden z dvou bytu:
+    ;   1. zapis: RRRGGGBB
+    ;   2. zapis: bit0=LSB_B  -> po tomto se auto-inkrementuje index
+    ; Celkem 512 zapisu = 256 entries * 2 byty.
+    ;
+    ; NESMI se mezi zapisy znovu nastavovat $243B - tim by se
+    ; resetoval interni citac a vzdy by se zapisoval jen 1. byte!
     ld      bc, NEXTREG_SEL
     ld      a, NR_PALETTE_CTRL
     out     (c), a
     ld      bc, NEXTREG_DAT
-    ld      a, %00010000
+    ld      a, %00010000                ; $10: auto-inc ON, Layer2 first
     out     (c), a
 
     ; index = 0
@@ -316,31 +442,31 @@ UPLOAD_PALETTE:
     xor     a
     out     (c), a
 
-    ld      hl, palette_buf
-    ld      d, 0                        ; 256 iteraci
-
-.loop:
-    ; prvni byte barvy -> $44
+    ; Nastav $243B na $44 (NR_PALETTE_VAL9) - a uz ho nemen!
     ld      bc, NEXTREG_SEL
     ld      a, NR_PALETTE_VAL9
     out     (c), a
-    ld      bc, NEXTREG_DAT
-    ld      a, (hl)
-    inc     hl
-    out     (c), a
 
-    ; druhy byte barvy -> $41
-    ld      bc, NEXTREG_SEL
-    ld      a, NR_PALETTE_VAL
-    out     (c), a
-    ld      bc, NEXTREG_DAT
+    ; Pis vsech 512 bytu palety POUZE pres $253B
+    ld      hl, palette_buf
+    ld      bc, NEXTREG_DAT             ; BC = $253B, uz se nemeni
+    ld      d, 0                        ; 256 iteraci (0 = 256 po dec)
+
+.loop:
+    ; 1. zapis: RRRGGGBB
     ld      a, (hl)
     inc     hl
+    out     (c), a
+    ; 2. zapis: LSB blue (bit0) -> auto-increment indexu
+    ld      a, (hl)
+    inc     hl
+    and     1
     out     (c), a
 
     dec     d
     jr      nz, .loop
     ret
+
 
 ; =============================================================================
 ; EXTRACT_FILENAME
@@ -526,6 +652,42 @@ PRINT_ASCIIZ_SAFE:
     ret
 
 ; =============================================================================
+; WAIT_KEY - ceka na stisk libovolne klavesy
+; =============================================================================
+WAIT_KEY:
+    call    WAIT_ALL_KEYS_RELEASED
+.wait_press:
+    call    ANY_KEY_PRESSED
+    or      a
+    jr      z, .wait_press
+    ret
+
+WAIT_ALL_KEYS_RELEASED:
+.loop:
+    call    ANY_KEY_PRESSED
+    or      a
+    jr      nz, .loop
+    ret
+
+ANY_KEY_PRESSED:
+    ld      hl, key_rows
+    ld      b, 8
+.scan:
+    ld      a, (hl)
+    inc     hl
+    in      a, ($FE)
+    and     $1F
+    cp      $1F
+    jr      nz, .pressed
+    djnz    .scan
+    xor     a
+    ret
+
+.pressed:
+    ld      a, 1
+    ret
+
+; =============================================================================
 ; Data
 ; =============================================================================
 arg_ptr:        defw    0
@@ -547,9 +709,10 @@ msg_e8:         defm    "Invalid drive", 13, 0
 msg_eunk:       defm    "Unknown error", 13, 0
 msg_err_open:   defm    "Cannot open: ", 0
 msg_err_read:   defm    "Read error or short file", 0
+msg_err_size:   defm    "Unsupported NXI size: ", 0
 
 msg_help:
-    defm    "SHOWNXI - NXI Layer 2 viewer", 13
+    defm    "SHOWNXI v1.9 - NXI Layer 2 viewer", 13
     defm    "Credit: Shrek/MB Maniax 2026", 13
     defb    13
     defm    "Usage:", 13
@@ -562,8 +725,10 @@ msg_help:
     defm    "  49664 B  image + 512 B palette", 13
     defb    0
 
+file_stat:      defs    11, 0
 filename_buf:   defs    64, 0
 palette_buf:    defs    512, 0
 scratch_buf:    defs    256, 0
+key_rows:       defb    $FE, $FD, $FB, $F7, $EF, $DF, $BF, $7F
 
     END     MAIN
