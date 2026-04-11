@@ -39,6 +39,7 @@ PALCTRL_L2_2     EQU %01010100   ; write/read Layer2 second, active Layer2 palet
 ; =============================================================================
 MAIN:
 ; =============================================================================
+    di
     ld      (arg_ptr), hl
 
     ld      hl, (arg_ptr)
@@ -75,7 +76,7 @@ MAIN:
 
     ; Priprav Layer 2 rezim 256x192
     call    L2_INIT_256
-
+    call    L2_RESET_VIEW
     ; Zjisti velikost souboru pres F_FSTAT.
     ; V dot commandu se misto IX predava buffer v HL.
     ; file_stat +7..+10 = velikost souboru (little endian)
@@ -170,14 +171,73 @@ MAIN:
 
 .load_pixels:
     ; Nacti 3x16K obraz do aktualnich Layer 2 bank
+
+    ; vynuluj prvni 2 bajty aktualni 16K L2 banky na $4000,$4001
+    ld      bc, NEXTREG_SEL
+    ld      a, NR_MMU2
+    out     (c), a
+    ld      bc, NEXTREG_DAT
+    ld      a, (page_lo)
+    out     (c), a
+
+    ld      bc, NEXTREG_SEL
+    ld      a, NR_MMU3
+    out     (c), a
+    ld      bc, NEXTREG_DAT
+    ld      a, (page_hi)
+    out     (c), a
+
+    xor     a
+    ld      ($4000), a
+    ld      ($4001), a
+
     ld      a, (l2_base_bank)
     call    READ_16K_TO_L2
     jp      c, .err_read
+
+    ; vynuluj prvni 2 bajty aktualni 16K L2 banky na $4000,$4001
+    ld      bc, NEXTREG_SEL
+    ld      a, NR_MMU2
+    out     (c), a
+    ld      bc, NEXTREG_DAT
+    ld      a, (page_lo)
+    out     (c), a
+
+    ld      bc, NEXTREG_SEL
+    ld      a, NR_MMU3
+    out     (c), a
+    ld      bc, NEXTREG_DAT
+    ld      a, (page_hi)
+    out     (c), a
+
+    xor     a
+    ld      ($4000), a
+    ld      ($4001), a
 
     ld      a, (l2_base_bank)
     inc     a
     call    READ_16K_TO_L2
     jp      c, .err_read
+
+
+    ; vynuluj prvni 2 bajty aktualni 16K L2 banky na $4000,$4001
+    ld      bc, NEXTREG_SEL
+    ld      a, NR_MMU2
+    out     (c), a
+    ld      bc, NEXTREG_DAT
+    ld      a, (page_lo)
+    out     (c), a
+
+    ld      bc, NEXTREG_SEL
+    ld      a, NR_MMU3
+    out     (c), a
+    ld      bc, NEXTREG_DAT
+    ld      a, (page_hi)
+    out     (c), a
+
+    xor     a
+    ld      ($4000), a
+    ld      ($4001), a
 
     ld      a, (l2_base_bank)
     add     a, 2
@@ -193,6 +253,7 @@ MAIN:
     defb    F_CLOSE
 
     call    L2_SHOW
+    ei
     call    WAIT_KEY
     call    L2_HIDE
     call    SELECT_L2_PALETTE_1
@@ -392,6 +453,51 @@ L2_INIT_256:
     ld      bc, NEXTREG_DAT
     xor     a
     out     (c), a
+    ret
+
+NR_LAYER2_XOFF   EQU $16
+NR_LAYER2_YOFF   EQU $17
+NR_CLIP_LAYER2   EQU $18
+NR_CLIP_CTRL     EQU $1C
+
+L2_RESET_VIEW:
+    ; X offset = 0
+    ld      bc, NEXTREG_SEL
+    ld      a, NR_LAYER2_XOFF
+    out     (c), a
+    ld      bc, NEXTREG_DAT
+    xor     a
+    out     (c), a
+
+    ; Y offset = 0
+    ld      bc, NEXTREG_SEL
+    ld      a, NR_LAYER2_YOFF
+    out     (c), a
+    ld      bc, NEXTREG_DAT
+    xor     a
+    out     (c), a
+
+    ; reset clip-window index
+    ld      bc, NEXTREG_SEL
+    ld      a, NR_CLIP_CTRL
+    out     (c), a
+    ld      bc, NEXTREG_DAT
+    ld      a, 1
+    out     (c), a
+
+    ; clip = X1=0, X2=255, Y1=0, Y2=191
+    ld      bc, NEXTREG_SEL
+    ld      a, NR_CLIP_LAYER2
+    out     (c), a
+    ld      bc, NEXTREG_DAT
+    xor     a
+    out     (c), a        ; X1 = 0
+    ld      a, 255
+    out     (c), a        ; X2 = 255
+    xor     a
+    out     (c), a        ; Y1 = 0
+    ld      a, 191
+    out     (c), a        ; Y2 = 191
     ret
 
 L2_SHOW:
@@ -745,7 +851,7 @@ msg_err_read:   defm    "Read error or short file", 0
 msg_err_size:   defm    "Unsupported NXI size: ", 0
 
 msg_help:
-    defm    "SHOWNXI 1.0 - NXI Layer 2 viewer", 13
+    defm    "SHOWNXI 1.1 - NXI Layer 2 viewer", 13
     defm    "Credit: Shrek/MB Maniax 2026", 13
     defb    13
     defm    "Usage:", 13
