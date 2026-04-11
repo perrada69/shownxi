@@ -33,8 +33,11 @@ SIZE_IMAGE       EQU 49152
 SIZE_PALETTE     EQU 512
 CHUNK            EQU 256
 
+NR_TRANSPARENCY   EQU $14
+NR_FALLBACK_COL   EQU $4A
+
 PALCTRL_L2_1     EQU %00010000   ; write/read Layer2 first, active Layer2 palette = first
-PALCTRL_L2_2     EQU %01010100   ; write/read Layer2 second, active Layer2 palette = second
+PALCTRL_L2_2     EQU %00010000   ; compatibility: use Layer2 first palette here as well
 
 ; =============================================================================
 MAIN:
@@ -77,6 +80,7 @@ MAIN:
     ; Priprav Layer 2 rezim 256x192
     call    L2_INIT_256
     call    L2_RESET_VIEW
+    call    SET_SAFE_TRANSPARENCY
     ; Zjisti velikost souboru pres F_FSTAT.
     ; V dot commandu se misto IX predava buffer v HL.
     ; file_stat +7..+10 = velikost souboru (little endian)
@@ -140,6 +144,7 @@ MAIN:
     jp      nz, .err_read
 
     call    UPLOAD_PALETTE_L2_2
+    call    SELECT_L2_PALETTE_1
 
     ; explicitne nastav file pointer za paletu
     ld      a, (file_handle)
@@ -311,6 +316,22 @@ MAIN:
     call    PRINT_HEX8
     call    PRINT_NL
     ld      bc, 0
+    ret
+
+SET_SAFE_TRANSPARENCY:
+    ld      bc, NEXTREG_SEL
+    ld      a, NR_TRANSPARENCY
+    out     (c), a
+    ld      bc, NEXTREG_DAT
+    ld      a, $55         ; safe value: not used by ZX base palette low bytes
+    out     (c), a
+
+    ld      bc, NEXTREG_SEL
+    ld      a, NR_FALLBACK_COL
+    out     (c), a
+    ld      bc, NEXTREG_DAT
+    xor     a              ; fallback = black
+    out     (c), a
     ret
 
 ; =============================================================================
@@ -546,11 +567,12 @@ SELECT_L2_PALETTE_2:
 
 ; =============================================================================
 ; UPLOAD_PALETTE_L2_2
-; 256 entries * 2 bytes do druhe Layer 2 palety
+; 256 entries * 2 bytes do aktivni Layer 2 palety
+; Pro kompatibilitu s NXI viewerem pouzivame vzdy Layer 2 PALETTE 1.
 ; BC se uvnitr smycky pouziva na porty, takze loop counter nesmi byt v B
 ; =============================================================================
 UPLOAD_PALETTE_L2_2:
-    ; NR_PALETTE_CTRL $43 = $10:
+    ; NR_PALETTE_CTRL:
     ;   bit7=0  auto-increment ZAPNUT
     ;   bits6-4 = 001 = Layer 2 first palette
     ;
@@ -568,7 +590,7 @@ UPLOAD_PALETTE_L2_2:
     ld      a, NR_PALETTE_CTRL
     out     (c), a
     ld      bc, NEXTREG_DAT
-    ld      a, PALCTRL_L2_2            ; $54: auto-inc ON, Layer2 second + active second
+    ld      a, PALCTRL_L2_1            ; kompatibilne pouzij Layer2 first + active first
     out     (c), a
 
     ; index = 0
